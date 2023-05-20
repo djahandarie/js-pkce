@@ -30,6 +30,7 @@
   "author": "Bryan Pedroza",
   "license": "MIT",
   "devDependencies": {
+    "@types/chrome": "^0.0.235",
     "@types/crypto-js": "^3.1.47",
     "@types/jest": "^25.2.3",
     "browserify": "^17.0.0",

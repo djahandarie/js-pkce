@@ -24,15 +24,15 @@ export default class PKCE {
    * @param  {object} additionalParams include additional parameters in the query
    * @return Promise<string>
    */
-  public authorizeUrl(additionalParams: IObject = {}): string {
-    const codeChallenge = this.pkceChallengeFromVerifier();
+  public async authorizeUrl(additionalParams: IObject = {}): Promise<string> {
+    const codeChallenge = await this.pkceChallengeFromVerifier();
 
     const queryString = new URLSearchParams(
       Object.assign(
         {
           response_type: 'code',
           client_id: this.config.client_id,
-          state: this.getState(additionalParams.state || null),
+          state: await this.getState(additionalParams.state || undefined),
           scope: this.config.requested_scopes,
           redirect_uri: this.config.redirect_uri,
           code_challenge: codeChallenge,
@@ -51,37 +51,35 @@ export default class PKCE {
    * @param  {object} additionalParams include additional parameters in the request body
    * @return {Promise<ITokenResponse>}
    */
-  public exchangeForAccessToken(url: string, additionalParams: IObject = {}): Promise<ITokenResponse> {
-    return this.parseAuthResponseUrl(url).then((q) => {
-      return fetch(this.config.token_endpoint, {
-        method: 'POST',
-        body: new URLSearchParams(
-          Object.assign(
-            {
-              grant_type: 'authorization_code',
-              code: q.code,
-              client_id: this.config.client_id,
-              redirect_uri: this.config.redirect_uri,
-              code_verifier: this.getCodeVerifier(),
-            },
-            additionalParams,
-          ),
+  public async exchangeForAccessToken(url: string, additionalParams: IObject = {}): Promise<ITokenResponse> {
+    return fetch(this.config.token_endpoint, {
+      method: 'POST',
+      body: new URLSearchParams(
+        Object.assign(
+          {
+            grant_type: 'authorization_code',
+            code: (await this.parseAuthResponseUrl(url)).code,
+            client_id: this.config.client_id,
+            redirect_uri: this.config.redirect_uri,
+            code_verifier: await this.getCodeVerifier(),
+          },
+          additionalParams,
         ),
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        },
-      }).then((response) => response.json());
-    });
+      ),
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+    }).then((response) => response.json());
   }
 
   /**
    * Get the current codeVerifier or generate a new one
    * @return {string}
    */
-  private getCodeVerifier(): string {
+  private async getCodeVerifier(): Promise<string> {
     if (this.codeVerifier === '') {
-      this.codeVerifier = this.randomStringFromStorage('pkce_code_verifier');
+      this.codeVerifier = await this.randomStringFromStorage('pkce_code_verifier');
     }
 
     return this.codeVerifier;
@@ -91,15 +89,15 @@ export default class PKCE {
    * Get the current state or generate a new one
    * @return {string}
    */
-  private getState(explicit: string = null): string {
+  private async getState(explicit?: string): Promise<string> {
     const stateKey = 'pkce_state';
 
-    if (explicit !== null) {
-      this.getStore().setItem(stateKey, explicit);
+    if (explicit !== undefined) {
+      await this.getStore().set({ stateKey: explicit });
     }
 
     if (this.state === '') {
-      this.state = this.randomStringFromStorage(stateKey);
+      this.state = await this.randomStringFromStorage(stateKey);
     }
 
     return this.state;
@@ -125,8 +123,8 @@ export default class PKCE {
    * Generate a code challenge
    * @return {Promise<string>}
    */
-  private pkceChallengeFromVerifier(): string {
-    const hashed = sha256(this.getCodeVerifier());
+  private async pkceChallengeFromVerifier(): Promise<string> {
+    const hashed = sha256(await this.getCodeVerifier());
     return Base64.stringify(hashed).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
@@ -135,13 +133,15 @@ export default class PKCE {
    * @param  {string} key
    * @return {string}
    */
-  private randomStringFromStorage(key: string): string {
-    const fromStorage = this.getStore().getItem(key);
-    if (fromStorage === null) {
-      this.getStore().setItem(key, WordArray.random(64));
+  private async randomStringFromStorage(key: string): Promise<string> {
+    const fromStorage = this.getStore().get(key);
+    if (key in fromStorage) {
+      return fromStorage[key];
+    } else {
+      let k = WordArray.random(64).toString();
+      await this.getStore().set({ key: k });
+      return k;
     }
-
-    return this.getStore().getItem(key) || '';
   }
 
   /**
@@ -149,25 +149,23 @@ export default class PKCE {
    * @param  {AuthResponse} queryParams
    * @return {Promise<IAuthResponse>}
    */
-  private validateAuthResponse(queryParams: IAuthResponse): Promise<IAuthResponse> {
-    return new Promise<IAuthResponse>((resolve, reject) => {
-      if (queryParams.error) {
-        return reject({ error: queryParams.error });
-      }
+  private async validateAuthResponse(queryParams: IAuthResponse): Promise<IAuthResponse> {
+    if (queryParams.error) {
+      throw new Error(queryParams.error);
+    }
 
-      if (queryParams.state !== this.getState()) {
-        return reject({ error: 'Invalid State' });
-      }
+    if (queryParams.state !== await this.getState()) {
+      throw new Error('Invalid State');
+    }
 
-      return resolve(queryParams);
-    });
+    return queryParams;
   }
 
   /**
    * Get the storage (sessionStorage / localStorage) to use, defaults to sessionStorage
-   * @return {Storage}
+   * @return {chrome.storage.StorageArea}
    */
-  private getStore(): Storage {
-    return this.config?.storage || sessionStorage;
+  private getStore(): chrome.storage.StorageArea {
+    return this.config?.storage || chrome.storage.session;
   }
 }
